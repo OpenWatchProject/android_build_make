@@ -194,6 +194,7 @@ _product_var_list += PRODUCT_SOONG_NAMESPACES
 
 _product_var_list += PRODUCT_DEFAULT_WIFI_CHANNELS
 _product_var_list += PRODUCT_DEFAULT_DEV_CERTIFICATE
+_product_list_vars += PRODUCT_MAINLINE_SEPOLICY_DEV_CERTIFICATES
 _product_var_list += PRODUCT_RESTRICT_VENDOR_FILES
 
 # The list of product-specific kernel header dirs

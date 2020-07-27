@@ -468,7 +468,7 @@ else
 INSTALLED_RECOVERYIMAGE_TARGET :=
 endif
 
-$(INSTALLED_BUILD_PROP_TARGET): $(intermediate_system_build_prop) $(INSTALLED_RECOVERYIMAGE_TARGET)
+$(INSTALLED_BUILD_PROP_TARGET): $(intermediate_system_build_prop)
 	@echo "Target build info: $@"
 	$(hide) grep -v 'ro.product.first_api_level' $(intermediate_system_build_prop) > $@
 
@@ -906,6 +906,8 @@ endif # BUILDING_RAMDISK_IMAGE
 
 
 INSTALLED_BOOTIMAGE_TARGET := $(PRODUCT_OUT)/boot.img
+MTK_BOOTIMAGE_TARGET := $(PRODUCT_OUT)/boot.img
+INSTALLED_BOOTIMAGE_TARGET := $(call intermediates-dir-for,PACKAGING,boot)/boot.img
 
 ifneq ($(strip $(TARGET_NO_KERNEL)),true)
 
@@ -1032,6 +1034,7 @@ endif
 $(eval $(call copy-one-file,$(BOARD_PREBUILT_BOOTIMAGE),$(INSTALLED_BOOTIMAGE_TARGET)))
 else # BOARD_PREBUILT_BOOTIMAGE not defined
 INSTALLED_BOOTIMAGE_TARGET :=
+MTK_BOOTIMAGE_TARGET :=
 endif # BOARD_PREBUILT_BOOTIMAGE
 endif # TARGET_NO_KERNEL
 
@@ -1050,7 +1053,8 @@ endif # TARGET_NO_KERNEL
 .PHONY: notice_files
 
 # Create the rule to combine the files into text and html/xml forms
-# $(1) - xml_excluded_vendor_product|xml_vendor|xml_product|html
+# $(1) - xml_excluded_system_product_odm|xml_excluded_vendor_product_odm
+#        xml_product|xml_odm|xml_system_ext|xml_system|html
 # $(2) - Plain text output file
 # $(3) - HTML/XML output file
 # $(4) - File title
@@ -1075,11 +1079,13 @@ $(2) $(3): PRIVATE_DIR := $(5)
 $(2) : $(3)
 $(3) : $(6) $(BUILD_SYSTEM)/Makefile build/make/tools/generate-notice-files.py
 	build/make/tools/generate-notice-files.py --text-output $(2) \
-	    $(if $(filter $(1),xml_excluded_extra_partitions),-e vendor -e product -e product_services --xml-output, \
-	      $(if $(filter $(1),xml_vendor),-i vendor --xml-output, \
+	    $(if $(filter $(1),xml_excluded_vendor_product_odm),-e vendor -e product -e product_services -e odm --xml-output, \
+	      $(if $(filter $(1),xml_excluded_system_product_odm),-e system -e product -e product_services -e odm --xml-output, \
 	        $(if $(filter $(1),xml_product),-i product --xml-output, \
-	          $(if $(filter $(1),xml_product_services),-i product_services --xml-output, \
-	            --html-output)))) $(3) \
+	          $(if $(filter $(1),xml_system_ext),-i system_ext --xml-output, \
+	            $(if $(filter $(1),xml_system),-i system --xml-output, \
+	              $(if $(filter $(1),xml_odm),-i odm --xml-output, \
+	                --html-output)))))) $(3) \
 	    -t $$(PRIVATE_MESSAGE) -s $$(PRIVATE_DIR)/src
 notice_files: $(2) $(3)
 endef
@@ -1132,28 +1138,54 @@ target_product_services_notice_file_xml := $(TARGET_OUT_INTERMEDIATES)/NOTICE_PR
 target_product_services_notice_file_xml_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE_PRODUCT_SERVICES.xml.gz
 installed_product_services_notice_xml_gz := $(TARGET_OUT_PRODUCT_SERVICES)/etc/NOTICE.xml.gz
 
+target_odm_notice_file_txt := $(TARGET_OUT_INTERMEDIATES)/NOTICE_ODM.txt
+target_odm_notice_file_xml := $(TARGET_OUT_INTERMEDIATES)/NOTICE_ODM.xml
+target_odm_notice_file_xml_gz := $(TARGET_OUT_INTERMEDIATES)/NOTICE_ODM.xml.gz
+installed_odm_notice_xml_gz := $(TARGET_OUT_ODM)/etc/NOTICE.xml.gz
+
 # Notice files are copied to TARGET_OUT_NOTICE_FILES as a side-effect of their module
 # being built. A notice xml file must depend on all modules that could potentially
 # install a license file relevant to it.
 license_modules := $(ALL_DEFAULT_INSTALLED_MODULES) $(kernel_notice_file) $(pdk_fusion_notice_files)
 # Phonys/fakes don't have notice files (though their deps might)
 license_modules := $(filter-out $(TARGET_OUT_FAKE)/%,$(license_modules))
+# testcases are not relevant to the system image.
+license_modules := $(filter-out $(TARGET_OUT_TESTCASES)/%,$(license_modules))
+license_modules_system := $(filter $(TARGET_OUT)/%,$(license_modules))
 license_modules_vendor := $(filter $(TARGET_OUT_VENDOR)/%,$(license_modules))
 license_modules_product := $(filter $(TARGET_OUT_PRODUCT)/%,$(license_modules))
 license_modules_product_services := $(filter $(TARGET_OUT_PRODUCT_SERVICES)/%,$(license_modules))
 license_modules_agg := $(license_modules_vendor) $(license_modules_product) $(license_modules_product_services)
+license_modules_odm := $(filter $(TARGET_OUT_ODM)/%,$(license_modules))
+license_modules_agg := $(license_modules_system) \
+                       $(license_modules_vendor) \
+                       $(license_modules_product) \
+                       $(license_modules_system_ext) \
+                       $(license_modules_odm)
 license_modules_rest := $(filter-out $(license_modules_agg),$(license_modules))
 
-$(eval $(call combine-notice-files, xml_excluded_extra_partitions, \
+# If we are building in a configuration that includes a prebuilt vendor.img, we can't
+# update its notice file, so include those notices in the system partition instead
+ifdef BOARD_PREBUILT_VENDORIMAGE
+license_modules_system += $(license_modules_rest)
+system_xml_directories := xml_excluded_vendor_product_odm
+system_notice_file_message := "Notices for files contained in all filesystem images except vendor/system_ext/product/odm in this directory:"
+else
+license_modules_vendor += $(license_modules_rest)
+system_xml_directories := xml_system
+system_notice_file_message := "Notices for files contained in the system filesystem image in this directory:"
+endif
+
+$(eval $(call combine-notice-files, $(system_xml_directories), \
 	        $(target_notice_file_txt), \
 	        $(target_notice_file_xml), \
-	        "Notices for files contained in the filesystem images in this directory:", \
+	        $(system_notice_file_message), \
 	        $(TARGET_OUT_NOTICE_FILES), \
-	        $(license_modules_rest)))
-$(eval $(call combine-notice-files, xml_vendor, \
+	        $(license_modules_system)))
+$(eval $(call combine-notice-files, xml_excluded_system_product_odm, \
 	        $(target_vendor_notice_file_txt), \
 	        $(target_vendor_notice_file_xml), \
-	        "Notices for files contained in the vendor filesystem image in this directory:", \
+	        "Notices for files contained in all filesystem images except system/system_ext/product/odm in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
 	        $(license_modules_vendor)))
 $(eval $(call combine-notice-files, xml_product, \
@@ -1168,6 +1200,12 @@ $(eval $(call combine-notice-files, xml_product_services, \
 	        "Notices for files contained in the product_services filesystem image in this directory:", \
 	        $(TARGET_OUT_NOTICE_FILES), \
 	        $(license_modules_product_services)))
+$(eval $(call combine-notice-files, xml_odm, \
+	        $(target_odm_notice_file_txt), \
+	        $(target_odm_notice_file_xml), \
+	        "Notices for files contained in the odm filesystem image in this directory:", \
+	        $(TARGET_OUT_NOTICE_FILES), \
+	        $(license_modules_odm)))
 
 $(target_notice_file_xml_gz): $(target_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
@@ -1176,6 +1214,8 @@ $(target_vendor_notice_file_xml_gz): $(target_vendor_notice_file_xml) | $(MINIGZ
 $(target_product_notice_file_xml_gz): $(target_product_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
 $(target_product_services_notice_file_xml_gz): $(target_product_services_notice_file_xml) | $(MINIGZIP)
+	$(hide) $(MINIGZIP) -9 < $< > $@
+$(target_odm_notice_file_xml_gz): $(target_odm_notice_file_xml) | $(MINIGZIP)
 	$(hide) $(MINIGZIP) -9 < $< > $@
 $(installed_notice_html_or_xml_gz): $(target_notice_file_xml_gz)
 	$(copy-file-to-target)
@@ -1190,6 +1230,9 @@ ifndef MERGE_PRODUCT_SERVICES_INTO_PRODUCT
 $(installed_product_services_notice_xml_gz): $(target_product_services_notice_file_xml_gz)
 	$(copy-file-to-target)
 endif
+$(installed_odm_notice_xml_gz): $(target_odm_notice_file_xml_gz)
+	$(copy-file-to-target)
+
 
 # if we've been run my mm, mmm, etc, don't reinstall this every time
 ifeq ($(ONE_SHOT_MAKEFILE),)
@@ -1197,6 +1240,7 @@ ifeq ($(ONE_SHOT_MAKEFILE),)
   ALL_DEFAULT_INSTALLED_MODULES += $(installed_vendor_notice_xml_gz)
   ALL_DEFAULT_INSTALLED_MODULES += $(installed_product_notice_xml_gz)
   ALL_DEFAULT_INSTALLED_MODULES += $(installed_product_services_notice_xml_gz)
+  ALL_DEFAULT_INSTALLED_MODULES += $(installed_odm_notice_xml_gz)
 endif
 endif # PRODUCT_NOTICE_SPLIT
 
@@ -1593,6 +1637,10 @@ recovery_density := $(strip \
        $(if $(filter $(shell echo $$(($(recovery_density_value) >= 400))),1),xxhdpi),\
        $(if $(filter $(shell echo $$(($(recovery_density_value) >= 280))),1),xhdpi),\
        $(if $(filter $(shell echo $$(($(recovery_density_value) >= 200))),1),hdpi,mdpi)))
+endif
+
+ifeq ($(strip $(MTK_RECOVERY_MEDIUM_RES)),yes)
+recovery_density :=mdpi
 endif
 
 ifneq (,$(wildcard $(recovery_resources_common)-$(recovery_density)))
@@ -2110,7 +2158,8 @@ $(INSTALLED_DEBUG_BOOTIMAGE_TARGET): $(MKBOOTIMG) $(INSTALLED_BOOTIMAGE_TARGET) 
 	  $(AVBTOOL) add_hash_footer \
 	    --image $@ \
 	    --partition_size $(BOARD_BOOTIMAGE_PARTITION_SIZE) \
-	    --partition_name boot $(PRIVATE_AVB_DEBUG_BOOT_SIGNING_ARGS), \
+	    --partition_name boot $(PRIVATE_AVB_DEBUG_BOOT_SIGNING_ARGS) \
+	    $(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS), \
 	  $(call assert-max-image-size,$@,$(BOARD_BOOTIMAGE_PARTITION_SIZE)))
 
 .PHONY: bootimage_debug-nodeps
@@ -2122,7 +2171,8 @@ bootimage_debug-nodeps: $(MKBOOTIMG)
 	  $(AVBTOOL) add_hash_footer \
 	    --image $(INSTALLED_DEBUG_BOOTIMAGE_TARGET) \
 	    --partition_size $(BOARD_BOOTIMAGE_PARTITION_SIZE) \
-	    --partition_name boot $(PRIVATE_AVB_DEBUG_BOOT_SIGNING_ARGS), \
+	    --partition_name boot $(PRIVATE_AVB_DEBUG_BOOT_SIGNING_ARGS) \
+	    $(BOARD_AVB_BOOT_ADD_HASH_FOOTER_ARGS), \
 	  $(call assert-max-image-size,$(INSTALLED_DEBUG_BOOTIMAGE_TARGET),$(BOARD_BOOTIMAGE_PARTITION_SIZE)))
 
 endif # TARGET_NO_KERNEL
@@ -3023,8 +3073,10 @@ endif
 # -----------------------------------------------------------------
 # dtbo image
 ifdef BOARD_PREBUILT_DTBOIMAGE
-INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/dtbo.img
-
+INSTALLED_DTBOIMAGE_TARGET := $(PRODUCT_OUT)/$(notdir $(BOARD_PREBUILT_DTBOIMAGE))
+ifdef BOARD_ODMDTBOIMG_PARTITION_SIZE
+BOARD_DTBOIMG_PARTITION_SIZE := $(BOARD_ODMDTBOIMG_PARTITION_SIZE)
+endif
 ifeq ($(BOARD_AVB_ENABLE),true)
 $(INSTALLED_DTBOIMAGE_TARGET): $(BOARD_PREBUILT_DTBOIMAGE) $(AVBTOOL) $(BOARD_AVB_DTBO_KEY_PATH)
 	cp $(BOARD_PREBUILT_DTBOIMAGE) $@
@@ -3372,6 +3424,22 @@ vbmetaimage-nodeps:
 
 endif # BOARD_AVB_ENABLE
 
+ifneq ($(strip $(TARGET_NO_KERNEL)),true)
+ifeq (yes, $(strip $(MAIN_VBMETA_IN_BOOT)))
+
+ifeq (true, $(strip $(BOARD_AVB_ENABLE)))
+$(MTK_BOOTIMAGE_TARGET): $(INSTALLED_BOOTIMAGE_TARGET) $(BUILT_VBMETAIMAGE_TARGET) $(AVBTOOL)
+	@echo "Install boot image: $@"
+	$(copy-file-to-target)
+	$(hide) $(AVBTOOL) append_vbmeta_image --image $@ --partition_size $(BOARD_BOOTIMAGE_PARTITION_SIZE) --vbmeta_image $(BUILT_VBMETAIMAGE_TARGET)
+endif
+
+else
+$(MTK_BOOTIMAGE_TARGET): $(INSTALLED_BOOTIMAGE_TARGET)
+	@echo "Install boot image: $@"
+	$(copy-file-to-target)
+endif # MAIN_VBMETA_IN_BOOT
+endif # TARGET_NO_KERNEL
 # -----------------------------------------------------------------
 # Check image sizes <= size of super partition
 
@@ -3778,6 +3846,7 @@ endef
 $(BUILT_TARGET_FILES_PACKAGE): \
 	    $(INSTALLED_RAMDISK_TARGET) \
 	    $(INSTALLED_BOOTIMAGE_TARGET) \
+	    $(MTK_BOOTIMAGE_TARGET) \
 	    $(INSTALLED_RADIOIMAGE_TARGET) \
 	    $(INSTALLED_RECOVERYIMAGE_TARGET) \
 	    $(FULL_SYSTEMIMAGE_DEPS) \
@@ -4028,6 +4097,9 @@ ifdef BOARD_AVB_RECOVERY_KEY_PATH
 	$(hide) echo "avb_recovery_algorithm=$(BOARD_AVB_RECOVERY_ALGORITHM)" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "avb_recovery_rollback_index_location=$(BOARD_AVB_RECOVERY_ROLLBACK_INDEX_LOCATION)" >> $(zip_root)/META/misc_info.txt
 endif # BOARD_AVB_RECOVERY_KEY_PATH
+ifeq (yes, $(strip $(MAIN_VBMETA_IN_BOOT)))
+	$(hide) echo "avb_main_vbmeta_in_boot=true" >> $(zip_root)/META/misc_info.txt
+endif # MAIN_VBMETA_IN_BOOT
 ifneq (,$(strip $(BOARD_AVB_VBMETA_SYSTEM)))
 	$(hide) echo "avb_vbmeta_system=$(BOARD_AVB_VBMETA_SYSTEM)" >> $(zip_root)/META/misc_info.txt
 	$(hide) echo "avb_vbmeta_system_args=$(BOARD_AVB_MAKE_VBMETA_SYSTEM_IMAGE_ARGS)" >> $(zip_root)/META/misc_info.txt
@@ -4052,6 +4124,12 @@ ifdef BOARD_BPT_DISK_SIZE
 	$(hide) echo "board_bpt_disk_size=$(BOARD_BPT_DISK_SIZE)" >> $(zip_root)/META/misc_info.txt
 endif
 	$(call generate-userimage-prop-dictionary, $(zip_root)/META/misc_info.txt)
+ifdef MTK_TARGET_PROJECT
+	@# sign image used to get boot and recovery sig files
+	$(hide) $(SHELL) $(SECURITY_SIG_TOOL)
+	@# Copy raw images which need OTA updates from out folder to zip_root/IMAGES folder
+	$(hide) MAIN_VBMETA_IN_BOOT="$(MAIN_VBMETA_IN_BOOT)" AB_OTA_UPDATER="$(AB_OTA_UPDATER)" AB_OTA_UPDATER_DEFAULT_TYPE="$(AB_OTA_UPDATER_DEFAULT_TYPE)"  PRODUCT_SHIPPING_API_LEVEL="$(PRODUCT_SHIPPING_API_LEVEL)" BOARD_SUPER_PARTITION_PARTITION_LIST="$(BOARD_SUPER_PARTITION_PARTITION_LIST)" AB_OTA_PARTITIONS="$(AB_OTA_PARTITIONS)" MTK_EMMC_SUPPORT="$(MTK_EMMC_SUPPORT)" MTK_UFS_SUPPORT="$(MTK_UFS_SUPPORT)" $(TARGET_RELEASETOOLS_EXTENSIONS)/mt_ota_preprocess.py $(zip_root) $(PRODUCT_OUT) $(PRODUCT_OUT)/ota_update_list.txt
+endif#MTK_TARGET_PROJECT
 ifneq ($(INSTALLED_RECOVERYIMAGE_TARGET),)
 ifdef BUILDING_SYSTEM_IMAGE
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
@@ -4102,7 +4180,7 @@ ifdef BOARD_PREBUILT_ODMIMAGE
 endif
 ifdef BOARD_PREBUILT_DTBOIMAGE
 	$(hide) mkdir -p $(zip_root)/PREBUILT_IMAGES
-	$(hide) cp $(INSTALLED_DTBOIMAGE_TARGET) $(zip_root)/PREBUILT_IMAGES/
+	$(hide) cp $(patsubst %.img, %-verified.img, $(INSTALLED_DTBOIMAGE_TARGET)) $(zip_root)/PREBUILT_IMAGES/dtbo.img
 	$(hide) echo "has_dtbo=true" >> $(zip_root)/META/misc_info.txt
 ifeq ($(BOARD_AVB_ENABLE),true)
 	$(hide) echo "dtbo_size=$(BOARD_DTBOIMG_PARTITION_SIZE)" >> $(zip_root)/META/misc_info.txt
@@ -4178,11 +4256,34 @@ endif # BOARD_SUPER_PARTITION_GROUPS
 	@# TODO(b/134525174): Remove `-r` after addressing the issue with recovery patch generation.
 	$(hide) PATH=$(foreach p,$(INTERNAL_USERIMAGES_BINARY_PATHS),$(p):)$$PATH MKBOOTIMG=$(MKBOOTIMG) \
 	    build/make/tools/releasetools/add_img_to_target_files -a -r -v -p $(HOST_OUT) $(zip_root)
+ifeq ($(notdir $(BOARD_PREBUILT_DTBOIMAGE)), odmdtbo.img)
+	mv $(zip_root)/IMAGES/dtbo.img $(zip_root)/IMAGES/odmdtbo.img
+endif
+ifeq (yes, $(strip $(MAIN_VBMETA_IN_BOOT)))
+ifeq (true, $(strip $(BOARD_AVB_ENABLE)))
+	$(hide) $(AVBTOOL) append_vbmeta_image --image $(zip_root)/IMAGES/boot.img --partition_size $(BOARD_BOOTIMAGE_PARTITION_SIZE) --vbmeta_image $(zip_root)/IMAGES/vbmeta.img
+endif
+endif
 	@# Zip everything up, preserving symlinks and placing META/ files first to
 	@# help early validation of the .zip file while uploading it.
 	$(hide) find $(zip_root)/META | sort >$@.list
-	$(hide) find $(zip_root) -path $(zip_root)/META -prune -o -print | sort >>$@.list
+	$(hide) find $(zip_root) -path $(zip_root)/META -prune -o -print | sort | sed -e 's/\[/\\\[/g' -e 's/\]/\\\]/g' >>$@.list
 	$(hide) $(SOONG_ZIP) -d -o $@ -C $(zip_root) -l $@.list
+ifdef MTK_TARGET_PROJECT
+	$(hide) $(TARGET_RELEASETOOLS_EXTENSIONS)/replace_img_from_target_files.py $@ $(PRODUCT_OUT)
+ifeq (true,$(PRODUCT_BUILD_SUPER_PARTITION))
+ifneq ($(BOARD_SUPER_PARTITION_SIZE),)
+ifneq (true,$(PRODUCT_RETROFIT_DYNAMIC_PARTITIONS))
+	$(call build-superimage-target,$(INSTALLED_SUPERIMAGE_TARGET),\
+	  $(call intermediates-dir-for,PACKAGING,superimage_debug)/misc_info.txt)
+endif
+endif
+endif
+	@# If SECURITY_IMAGE_PATH doesn't exist , security version is 1.1 and images need to sign again
+ifeq ("$(wildcard $(SECURITY_IMAGE_PATH))","")
+	$(hide) $(SHELL) $(SECURITY_SIG_TOOL) yes
+endif
+endif#MTK_TARGET_PROJECT
 
 .PHONY: target-files-package
 target-files-package: $(BUILT_TARGET_FILES_PACKAGE)
